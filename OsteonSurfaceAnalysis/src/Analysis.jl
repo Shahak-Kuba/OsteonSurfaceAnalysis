@@ -2,7 +2,7 @@ module Analysis
 
 using LinearAlgebra
 
-export analysis_Tdelay_pairs
+export analysis_Tdelay_pairs, compute_curvature
 
 function generate_Tdelay_pairs(proj_points_right, proj_points_left, tvals)
     Tdelay_proj_points_right = []
@@ -98,7 +98,7 @@ function analysis_Tdelay_pairs(proj_points)
     α = zeros(size(Tdelay_proj_point_pairs,1), size(Tdelay_proj_point_pairs[1],1))
     for cont in axes(α,1)
         for xy_ang in axes(α,2)
-            v1 = Tdelay_proj_point_pairs[1][1][1] .- Tdelay_proj_point_pairs[1][1][2]
+            v1 = Tdelay_proj_point_pairs[cont][xy_ang][1] .- Tdelay_proj_point_pairs[cont][xy_ang][2]
             v2 = [0.0, v1[2]]
             α_val = angle_between_vectors(v1, v2)
             if Tdelay_line_∇[cont][xy_ang] < 0.0
@@ -109,6 +109,62 @@ function analysis_Tdelay_pairs(proj_points)
         end
     end
     return Tdelay_proj_point_pairs, Tdelay_line_∇, α
+end
+
+"""
+    kappa = compute_curvature(ϕ, dx, dy, dz; eps=1e-12)
+
+Compute mean curvature κ of the level set ϕ(x,y,z) on a regular 3D grid,
+using 2nd-order central differences.
+
+κ = ( ϕx^2 ϕyy - 2 ϕx ϕy ϕxy + ϕy^2 ϕxx
+    + ϕx^2 ϕzz - 2 ϕx ϕz ϕxz + ϕz^2 φxx
+    + ϕy^2 ϕzz - 2 ϕy ϕz ϕyz + ϕz^2 φyy ) / |∇φ|^3
+
+This method of calculating curvature comes from Oscher 2003 Eq(1.8). 
+The spacing (dx,dy,dz) are the grid steps in x,y,z.
+"""
+function compute_curvature(ϕ::AbstractArray{<:Real,3},
+                           dx::Real, dy::Real, dz::Real; eps=1e-12)
+
+    nx, ny, nz = size(ϕ)
+    kappa = fill!(similar(ϕ, Float64), 0.0)
+
+    inv2dx = 1.0/(2*dx); inv2dy = 1.0/(2*dy); inv2dz = 1.0/(2*dz)
+    invdx2 = 1.0/(dx*dx); invdy2 = 1.0/(dy*dy); invdz2 = 1.0/(dz*dz)
+    inv4dxdy = 1.0/(4*dx*dy); inv4dxdz = 1.0/(4*dx*dz); inv4dydz = 1.0/(4*dy*dz)
+
+    @inbounds for k in 2:nz-1, j in 2:ny-1, i in 2:nx-1
+        ϕc = ϕ[i, j, k]
+
+        # First derivatives (central)
+        ϕx = (ϕ[i+1, j,   k  ] - ϕ[i-1, j,   k  ]) * inv2dx
+        ϕy = (ϕ[i,   j+1, k  ] - ϕ[i,   j-1, k  ]) * inv2dy
+        ϕz = (ϕ[i,   j,   k+1] - ϕ[i,   j,   k-1]) * inv2dz
+
+        # Second derivatives (central)
+        ϕxx = (ϕ[i+1, j,   k  ] - 2ϕc + ϕ[i-1, j,   k  ]) * invdx2
+        ϕyy = (ϕ[i,   j+1, k  ] - 2ϕc + ϕ[i,   j-1, k  ]) * invdy2
+        ϕzz = (ϕ[i,   j,   k+1] - 2ϕc + ϕ[i,   j,   k-1]) * invdz2
+
+        # Mixed derivatives (central)
+        ϕxy = (ϕ[i+1, j+1, k] - ϕ[i+1, j-1, k] - ϕ[i-1, j+1, k] + ϕ[i-1, j-1, k]) * inv4dxdy
+        ϕxz = (ϕ[i+1, j, k+1] - ϕ[i+1, j, k-1] - ϕ[i-1, j, k+1] + ϕ[i-1, j, k-1]) * inv4dxdz
+        ϕyz = (ϕ[i, j+1, k+1] - ϕ[i, j+1, k-1] - ϕ[i, j-1, k+1] + ϕ[i, j-1, k-1]) * inv4dydz
+
+        # |∇ϕ|
+        gradmag = sqrt(ϕx*ϕx + ϕy*ϕy + ϕz*ϕz) + eps  # eps avoids divide-by-zero
+        denom = gradmag^3
+
+        # Numerator
+        num  =  (ϕx^2)*ϕyy - 2*ϕx*ϕy*ϕxy + (ϕy^2)*ϕxx
+        num +=  (ϕx^2)*ϕzz - 2*ϕx*ϕz*ϕxz + (ϕz^2)*ϕxx
+        num +=  (ϕy^2)*ϕzz - 2*ϕy*ϕz*ϕyz + (ϕz^2)*ϕyy
+
+        kappa[i, j, k] = num / denom
+    end
+
+    return kappa
 end
 
 end # end of module

@@ -80,3 +80,4 @@ a1 = GLMakie.Axis(f4[1, 1], title = "T delay = $(ΔT)", xlabel="β", ylabel="α"
 OsteonSurfaceAnalysis.plot_α_β!(a1, α, β, tvals)
 Legend(f4[1,2], a1, "ϕ times")
 
+display(f3)
