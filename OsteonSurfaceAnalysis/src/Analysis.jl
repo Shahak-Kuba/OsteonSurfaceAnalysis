@@ -1,5 +1,7 @@
 module Analysis
 
+using LinearAlgebra
+
 export analysis_Tdelay_pairs
 
 function generate_Tdelay_pairs(proj_points_right, proj_points_left, tvals)
@@ -84,11 +86,29 @@ function analysis_Tdelay_pairs(proj_points_right, proj_points_left, tvals, inter
     return Tdelay_proj_points_right, Tdelay_proj_points_left, line_∇_right, line_∇_left, α
 end
 
+function angle_between_vectors(v1, v2)
+    cosθ = dot(v1, v2) / (norm(v1) * norm(v2))
+    return acos(clamp(cosθ, -1.0, 1.0))
+end
+
 function analysis_Tdelay_pairs(proj_points)
     Tdelay_proj_point_pairs = generate_Tdelay_pairs(proj_points)
     Tdelay_line_∇ = compute_Tdelay_gradients(Tdelay_proj_point_pairs)
     # compute α here
-    return Tdelay_proj_point_pairs, Tdelay_line_∇
+    α = zeros(size(Tdelay_proj_point_pairs,1), size(Tdelay_proj_point_pairs[1],1))
+    for cont in axes(α,1)
+        for xy_ang in axes(α,2)
+            v1 = Tdelay_proj_point_pairs[1][1][1] .- Tdelay_proj_point_pairs[1][1][2]
+            v2 = [0.0, v1[2]]
+            α_val = angle_between_vectors(v1, v2)
+            if Tdelay_line_∇[cont][xy_ang] < 0.0
+                α[cont,xy_ang] = -rad2deg(α_val)
+            else
+                α[cont,xy_ang] = rad2deg(α_val)
+            end
+        end
+    end
+    return Tdelay_proj_point_pairs, Tdelay_line_∇, α
 end
 
 end # end of module

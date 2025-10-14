@@ -16,8 +16,8 @@ OsteonSurfaceAnalysis.generate_RG_img_from_data(path_HCa, path_On, processes_out
 paths = [processes_output_path, processes_output_path]
 downsample = 1
 Δz = 50.0;
-Δθ = pi/4;
-ΔT = 0.5;
+Δθ = pi/6;
+ΔT = 0.2;
 
 θs = collect(0.0:Δθ:pi); 
 if θs[end] ≈ pi; pop!(θs); end
@@ -36,7 +36,7 @@ intersecting_points, cutting_planes = OsteonSurfaceAnalysis.compute_planes_and_i
 
 proj_points = OsteonSurfaceAnalysis.proj_3D_onto_XZ(intersecting_points, cutting_planes, top_center_3D, bottom_center_3D)
 
-Tdelay_proj_points, line_∇ = OsteonSurfaceAnalysis.analysis_Tdelay_pairs(proj_points)
+Tdelay_proj_points, line_∇, α = OsteonSurfaceAnalysis.analysis_Tdelay_pairs(proj_points)
 
 
 
@@ -75,13 +75,8 @@ OsteonSurfaceAnalysis.plot_example_slices!(ax, Tdelay_proj_points, line_∇)
 Colorbar(f3[:,3],  colormap=:jet, colorrange=(-10,10), label="gradient")
 
 # α vs β plot
-β = repeat(θs, 2);
-for i in size(θs,1)+1:length(β)
-    β[i] += π
-end
 f4 = Figure(size = (1200, 800))
 a1 = GLMakie.Axis(f4[1, 1], title = "T delay = $(ΔT)", xlabel="β", ylabel="α")
 OsteonSurfaceAnalysis.plot_α_β!(a1, α, β, tvals)
 Legend(f4[1,2], a1, "ϕ times")
 
-display(f2)
