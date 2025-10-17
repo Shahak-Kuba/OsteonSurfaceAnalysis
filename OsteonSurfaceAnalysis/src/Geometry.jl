@@ -10,7 +10,7 @@ Plane, compute_planes_and_intersections, proj_3D_onto_XZ
 function compute_zero_contour_xy_coords(ϕ,z_layer,tval_idx)
     if length(size(ϕ)) > 3
         H,W,D = size(ϕ[:,:,:,tval_idx])
-        ϕ_at_t = ϕ[:,:,z_layer,end]
+        ϕ_at_t = ϕ[:,:,z_layer,tval_idx]
     else
         H,W,D = size(ϕ)
         ϕ_at_t = ϕ[:,:,z_layer]
@@ -298,7 +298,5 @@ function proj_3D_onto_XZ(intersecting_points, cutting_planes, top_center, bottom
     end
     return proj_points #proj_points_right, proj_points_left #proj_centers (NEEDS to be fixed)
 end
-
-
 
 end # end of module

@@ -1,5 +1,5 @@
 
-data_path = readdir("./DATA/"; join=true)
+data_path = readdir("././DATA/"; join=true)
 output_path = data_path[3]
 
 r1 = 50; r2 = 300; 

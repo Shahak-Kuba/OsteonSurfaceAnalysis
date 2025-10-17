@@ -50,7 +50,7 @@ function build_outer_inner(img_paths; downsample=1)
         fn = img_paths[z0+1]
         img = load(fn)
         # flip vertically
-        img = reverse(img, dims=2)
+        #img = reverse(img, dims=2)
 
         # downsample
         img = img[1:downsample:end, 1:downsample:end]
