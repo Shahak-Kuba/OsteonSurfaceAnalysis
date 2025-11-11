@@ -1,6 +1,7 @@
 module Analysis
 
 using LinearAlgebra
+using Statistics
 
 export analysis_Tdelay_pairs, compute_curvature, compute_curvature_4th
 
@@ -93,9 +94,13 @@ function compute_curvature(ϕ::AbstractArray{<:Real,3},
         ϕzz = (ϕ[i,   j,   k+1] - 2ϕc + ϕ[i,   j,   k-1]) * invdz2
 
         # Mixed derivatives (central)
-        ϕxy = (ϕ[i+1, j+1, k] - ϕ[i+1, j-1, k] - ϕ[i-1, j+1, k] + ϕ[i-1, j-1, k]) * inv4dxdy
-        ϕxz = (ϕ[i+1, j, k+1] - ϕ[i+1, j, k-1] - ϕ[i-1, j, k+1] + ϕ[i-1, j, k-1]) * inv4dxdz
-        ϕyz = (ϕ[i, j+1, k+1] - ϕ[i, j+1, k-1] - ϕ[i, j-1, k+1] + ϕ[i, j-1, k-1]) * inv4dydz
+        #ϕxy = (ϕ[i+1, j+1, k] - ϕ[i+1, j-1, k] - ϕ[i-1, j+1, k] + ϕ[i-1, j-1, k]) * inv4dxdy
+        #ϕxz = (ϕ[i+1, j, k+1] - ϕ[i+1, j, k-1] - ϕ[i-1, j, k+1] + ϕ[i-1, j, k-1]) * inv4dxdz
+        #ϕyz = (ϕ[i, j+1, k+1] - ϕ[i, j+1, k-1] - ϕ[i, j-1, k+1] + ϕ[i, j-1, k-1]) * inv4dydz
+        ϕxy = (ϕx[i,   j+1, k  ] - ϕx[i,   j-1, k  ]) * inv2dy
+        ϕxz = (ϕx[i,   j,   k+1] - ϕx[i,   j,   k-1]) * inv2dz
+        ϕyz = (ϕy[i,   j,   k+1] - ϕy[i,   j,   k-1]) * inv2dz
+
 
         # |∇ϕ|
         gradmag = sqrt(ϕx*ϕx + ϕy*ϕy + ϕz*ϕz) + eps  # eps avoids divide-by-zero
@@ -112,20 +117,20 @@ function compute_curvature(ϕ::AbstractArray{<:Real,3},
     return kappa
 end
 
+
 """
-    kappa = compute_curvature_4th(ϕ, dx, dy, dz; eps=1e-12)
+    κ = compute_curvature_4th(ϕ, dx, dy, dz; eps=1e-12)
 
-Compute the level-set mean curvature κ of ϕ(x,y,z) on a regular 3D grid,
-using **4th-order central differences** on the interior (i=3..nx-2, etc.)
-and **2nd-order central differences** on a 2-cell boundary band.
+Compute the level-set mean curvature κ of ϕ(x,y,z) on a rectangular 3D grid with spacings dx, dy, and dz,
+using 4th-order central differences on the interior
+and 2nd-order central differences on a 2-cell boundary band.
 
-The formula is (Osher/Sethian-style):
+From Oscher 2003, the formula is given by κ = ∇ϕ / ||∇ϕ|| which expands to:
 κ = ( ϕx^2 ϕyy - 2 ϕx ϕy ϕxy + ϕy^2 ϕxx
     + ϕx^2 ϕzz - 2 ϕx ϕz ϕxz + ϕz^2 ϕxx
     + ϕy^2 ϕzz - 2 ϕy ϕz ϕyz + ϕz^2 ϕyy ) / |∇ϕ|^3
 
-`eps` avoids division by zero.
-Requires at least 5 grid points along each axis for the 4th-order interior.
+`eps` is added in to avoid division by zero.
 """
 function compute_curvature_4th(ϕ::AbstractArray{<:Real,3},
                                dx::Real, dy::Real, dz::Real; eps=1e-12)
@@ -224,6 +229,160 @@ function compute_curvature_4th(ϕ::AbstractArray{<:Real,3},
     end
 
     return kappa
+end
+
+"""
+    ensure_ccw(X, Y)
+
+Takes coordinate vectors `X` and `Y` representing a closed 2D curve and
+returns `(X2, Y2)` oriented **counterclockwise** (anti-clockwise).
+
+If the points are already CCW, they are returned unchanged.
+If they are clockwise, they are reversed.
+
+Returns
+-------
+`(X2, Y2, flipped)` where `flipped::Bool` is `true` if the order was reversed.
+"""
+function ensure_ccw(X::AbstractVector, Y::AbstractVector)
+    @assert length(X) == length(Y) "X and Y must be same length"
+    N = length(X)
+    @assert N ≥ 3 "Need at least 3 points"
+
+    # Compute signed area (shoelace formula)
+    A2 = 0.0
+    @inbounds for i in 1:N
+        j = (i == N) ? 1 : i + 1
+        A2 += X[i] * Y[j] - X[j] * Y[i]
+    end
+
+    if A2 > 0     # already CCW
+        return (X, Y, false)
+    else           # CW: reverse
+        return (reverse(X), reverse(Y), true)
+    end
+end
+
+"""
+    κ = local_curvature(x, y; k=5, method=:constrained, sigma=nothing,
+                        weights=:gaussian, signed=true)
+
+Estimate local curvature κ at each vertex of a **closed** 2D polyline given by
+`(x[i], y[i])`, using a least-squares quadratic fit in a tangent-aligned frame.
+
+Arguments
+---------
+- `x, y` : Vectors (same length N) of coordinates.
+
+Keyword args
+-----------
+- `k::Int=5` : # of neighbors on each side to include in the local fit.
+- `method::Symbol=:constrained` :
+      `:constrained`  → fit v ≈ a u^2   (enforces v(0)=v'(0)=0) ⇒ κ = 2a
+      `:unconstrained`→ fit v ≈ a u^2 + b u + c               ⇒ κ = 2a/(1+b^2)^(3/2)
+- `sigma` : bandwidth for Gaussian weights in u. If `nothing`, choose
+            `sigma = 2*std(u)` per window (fallback to max(|u|) if degenerate).
+- `weights::Symbol=:gaussian` : `:gaussian` or `:uniform`.
+- `signed::Bool=true` : if `true`, keep curvature sign (left turn positive
+                        under the “left-normal is +v” convention).
+
+Returns
+-------
+- `κ::Vector{Float64}` : curvature at each vertex (NaN where fit is ill-conditioned).
+
+Notes
+-----
+- Indices wrap around (closed curve).
+- If you have very noisy data, consider increasing `k`.
+- For sharp corners, any quadratic will smear the peak; treat separately if needed.
+"""
+function local_curvature(x::AbstractVector, y::AbstractVector;
+                         k::Int=5, method::Symbol=:constrained,
+                         sigma=nothing, weights::Symbol=:none,
+                         signed::Bool=true)
+
+    @assert length(x) == length(y) "x and y must have same length"
+    N = length(x)
+    @assert N ≥ 5 "Need at least 5 points"
+
+    # FIX: wrap using mod1 (1..N)
+    wrap(i) = mod1(i, N)
+
+    function tangent(i)
+        ip = wrap(i+1); im = wrap(i-1)
+        tx = x[ip] - x[im]
+        ty = y[ip] - y[im]
+        n = hypot(tx, ty)
+        return n == 0 ? (1.0, 0.0) : (tx/n, ty/n)
+    end
+
+    function to_local(i, j, tx, ty)
+        dx = x[j] - x[i]
+        dy = y[j] - y[i]
+        u =  tx*dx + ty*dy
+        v = -ty*dx + tx*dy
+        return (u, v)
+    end
+
+    x,y = ensure_ccw(x, y)
+
+    κ = fill(NaN, N)
+
+    for i in 1:N
+        left  = [wrap(i - s) for s in k:-1:1]
+        right = [wrap(i + s) for s in 1:k]
+        neigh = vcat(left, right)
+
+        tx, ty = tangent(i)
+
+        U = Vector{Float64}(undef, 2k)
+        V = Vector{Float64}(undef, 2k)
+        @inbounds for (m, j) in enumerate(neigh)
+            u, v = to_local(i, j, tx, ty)
+            U[m] = u; V[m] = v
+        end
+
+        w = ones(2k)
+        if weights == :gaussian
+            σ = isnothing(sigma) ? (2*std(U)) : float(sigma)
+            if !(σ > 0)
+                σ = maximum(abs, U); σ = (σ > 0) ? σ : 1.0
+            end
+            @inbounds for m in 1:2k
+                w[m] = exp(-(U[m]^2)/(σ^2))
+            end
+        end
+
+        if method == :constrained
+            num = 0.0; den = 0.0
+            @inbounds for m in 1:2k
+                u = U[m]; v = V[m]; wm = w[m]; u2 = u*u
+                num += wm * u2 * v
+                den += wm * u2 * u2
+            end
+            κ[i] = den > eps() ? 2 * (num/den) : NaN
+
+        elseif method == :unconstrained
+            A = ones(2k, 3)
+            @inbounds for m in 1:2k
+                u = U[m]
+                A[m,1] = u*u
+                A[m,2] = u
+            end
+            sw = sqrt.(w)
+            coeff = (A .* sw) \ (V .* sw)
+            a, b, _ = coeff
+            κ[i] = 2a / (1 + b^2)^(3/2)
+        else
+            error("Unknown method: $method")
+        end
+
+        if !signed
+            κ[i] = abs(κ[i])
+        end
+    end
+
+    return κ
 end
 
 end # end of module

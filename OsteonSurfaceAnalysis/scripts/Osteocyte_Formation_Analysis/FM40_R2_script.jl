@@ -80,6 +80,34 @@ function estimate_Ocy_formation_time(outer, inner, Ocy_pos_voxel)
     return t_form
 end
 
+function unwrap_top_level_set_contour(ϕ, t_index, dx, dy)
+    X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ,1,t_index)
+    x = X .* dx; y = Y .* dy;
+    
+    # computing centroid based of Haversian Canal
+    centroid = OsteonSurfaceAnalysis.compute_xy_center(ϕ,1,size(ϕ,4))
+    #println(centroid)
+    x_c = centroid[1] * dx; y_c = centroid[2] * dy;
+
+    # shifting osteon to the center
+    x = x .- x_c; y = y .- y_c
+
+    # converting to polar #### SONETHING IS NOT WORKING HERE ######
+    R = sqrt.(x.^2 + y.^2);
+    function theta_from_coords(x, y)
+        θ = atan.(y, x)  # returns angle in range -π to π
+        for (ii, angle) in enumerate(θ)
+            #println(angle)
+            if angle < 0
+                θ[ii] += 2π      # shift negative angles into 0 to 2π
+            end
+        end
+        return θ
+    end
+    θ = theta_from_coords(x, y)
+    return R, θ
+end
+
 a_outer, a_inner = build_outer_inner(paths)
 
 # estimating formation times
@@ -103,17 +131,21 @@ for (ti,t) in enumerate(t_form_ordered)
     end
 end
 
-idx = collect(1:10:61)
-tvals2 = tvals[idx]
-
 #tvals = collect(0:ΔT:1.0)
-outer_dt_S = pyconvert(Array{Float32, 3},edt_S_py(PythonCall.PyArray(a_outer)))
-inner_dt_S = pyconvert(Array{Float32, 3},edt_S_py(PythonCall.PyArray(a_inner)))
+tvals = tvals[1:10:61]
+idx = 1:10:61
 
-ϕ = compute_ϕ_stack_3D_py(a_outer, a_inner, tvals2) # for some reason code breaks here
+ϕ = compute_ϕ_stack_3D_py(a_outer, a_inner, tvals) # for some reason code breaks here
+
+GLMakie.activate!()
+f1 = Figure(size=(800,800))
+a1 = Axis(f1[1, 1], title = "Unwrapped osteon lamella: top level", xlabel="θ [rad]", ylabel="R [μm]")
+for ii in axes(ϕ,4)
+    R, θ = unwrap_top_level_set_contour(ϕ, ii, dx, dy)
+    lines!(a1, θ[sortperm(θ)], R[sortperm(θ)], linewidth = 3)
+end
+
 #ϕ = ϕ_func(0, outer_dt_S, inner_dt_S)
-
-K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,1],dx,dy,dz)
 
 H,W,D = size(ϕ[:,:,:,1])
 x = (collect(1:H).-1).*dx
@@ -124,6 +156,9 @@ surface!(a1, x, y, K2[:,:,6], colormap=:jet)
 
 f1 = Figure(size=(800,800))
 a1 = Axis3(f1[1, 1], title = "Computed curvature from ϕ")
+for ii in axes(ϕ,4)
+    contour!(a1, 0 .. H*dx, 0 .. W*dy, 0 .. D*dz, ϕ[:,:,:,ii], levels = [0.0], isorange = 3, colormap=:jet, colorrange=(-0.1,0.1))
+end
 contour!(a1, 0 .. H*dx, 0 .. W*dy, 0 .. D*dz, ϕ[:,:,:,1], levels = [0.0], isorange = 3, colormap=:jet, colorrange=(-0.1,0.1))
 contour!(a1, 0 .. H*dx, 0 .. W*dy, 0 .. D*dz, ϕ[:,:,:,end], levels = [0.0], isorange = 3, colormap=:jet, colorrange=(-0.1,0.1))
 scatter!(a1, Ocy_pos, markersize=12, color=:green)
@@ -237,6 +272,30 @@ function curvature_at_contour(K::AbstractArray{T,3},
     return res
 end
 
+function moving_average(x::AbstractVector, window::Int)
+    n = length(x)
+    if window < 1 || window > n
+        throw(ArgumentError("window must be between 1 and length(x)"))
+    end
+
+    # Handle both row and column vectors
+    is_row = size(x, 1) == 1
+    xvec = vec(x)  # work as column internally
+
+    half = div(window, 2)
+    smoothed = similar(xvec, Float64)
+
+    for i in 1:n
+        # Compute wrapped indices
+        idxs = mod1.(i-half : i+half, n)
+        smoothed[i] = mean(xvec[idxs])
+    end
+
+    # Preserve shape
+    return vec(is_row ? reshape(smoothed, 1, :) : reshape(smoothed, :, 1))
+end
+
+
 set_theme!(theme_black(), fontsize = 30)
 H,W,D = size(ϕ[:,:,:,1])
 x = collect(1.0:H)
@@ -246,24 +305,53 @@ f1 = Figure(size=(800,800))
 a1 = Axis3(f1[1, 1], title = "Computed curvature from ϕ")
 dx = 0.379; dy = 0.379; dz = 0.4;
 for ti in axes(ϕ,4)
-    K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,ti],dx,dy,dz)
+    #K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,ti],dx,dy,dz)
     z_layer = Ocy_pos_voxel_in_domain[idx[ti]][3]
     #K4 = OsteonSurfaceAnalysis.compute_curvature_4th(ϕ[:,:,:,ti],dx,dy,dz)
     X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, ti);
-    k2 = curvature_at_contour(K2,x,y,z,z_layer,X,Y)
+    R = sqrt.(X.^2 + Y.^2)
+    #k2 = curvature_at_contour(K2,x,y,z,z_layer,X,Y)
     #k4 = curvature_at_contour(K4,x,y,z,z_layer,X,Y)
-    println("average second order curvature on 0 contour: ", mean(k2))
+    curvature = OsteonSurfaceAnalysis.Analysis.local_curvature(X,Y; k = 50)
+    #k4 = curvature_at_contour(K4,x,y,z,z_layer,X,Y)
+
     #println("average fourth order curvature on 0 contour: ", mean(k4))
     #println("average difference between approximations on 0 contour: ", mean(k4 .- k2))
-    lines!(a1, X*dx, Y*dy, ones(length(X)).*z_layer*dz,linewidth=4,color=k2, colormap=:dense, colorrange = (-0.01, 0.01))
+    lines!(a1, X*dx, Y*dy, ones(length(X)).*z_layer*dz,linewidth=4,color=curvature, colormap=:dense, colorrange = (-0.01, 0.01))
 end
 scatter!(a1, Ocy_pos_in_domain[1:10:61], markersize=15,color=:red)
-Colorbar(f1[1,2], colormap=:dense, colorrange = (-0.4, 0.4))
+Colorbar(f1[1,2], colormap=:dense, colorrange = (-0.01, 0.01))
+
+
+f1 = Figure(size=(800,800))
+a1 = GLMakie.Axis(f1[1, 1], title = "Computed curvature from ϕ")
+dx = 0.379; dy = 0.379; dz = 0.4;
+ti = 2;
+K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,ti],dx,dy,dz)
+z_layer = 70#Ocy_pos_voxel_in_domain[idx[ti]][3]
+#K4 = OsteonSurfaceAnalysis.compute_curvature_4th(ϕ[:,:,:,ti],dx,dy,dz)
+X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, ti);
+R = sqrt.((X.*dx).^2 + (Y.*dy).^2)
+k2 = curvature_at_contour(K2,x,y,z,z_layer,X,Y)
+lines!(a1, 1 ./ k2, linewidth = 3, color = :blue)
+lines!(a1, R, linewidth = 3, color = :red)
+
+
+for ti in axes(ϕ,4)
+    K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,ti],dx,dy,dz)
+    z_layer = 70#Ocy_pos_voxel_in_domain[idx[ti]][3]
+    #K4 = OsteonSurfaceAnalysis.compute_curvature_4th(ϕ[:,:,:,ti],dx,dy,dz)
+    X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, ti);
+    R = sqrt.(X.^2 + Y.^2)
+    k2 = curvature_at_contour(K2,x,y,z,z_layer,X,Y)
+    lines!(a1, k2, linewidth = 3)
+
+end
 
 
 Ocy_count = collect(1:length(tvals))
-Ocy_form_rate = Ocy_count ./ tvals
+t_between_formation = diff([0;tvals])
 f1 = Figure(size=(800,800))
-a1 = GLMakie.Axis(f1[1, 1], title = "Ocy form rate", xlabel="t", ylabel="# formed Ocy / t")
-lines!(a1, tvals, Ocy_form_rate, linewidth=3,color=:white)
-scatter!(a1, tvals, Ocy_form_rate, markersize=15,color=:white)
+a1 = GLMakie.Axis(f1[1, 1], title = "non dim time between osteocyte formation", xlabel="Osteocyte #", ylabel="dt")
+lines!(a1, Ocy_count, t_between_formation, linewidth=3,color=:white)
+scatter!(a1, Ocy_count, t_between_formation, markersize=15,color=:white)

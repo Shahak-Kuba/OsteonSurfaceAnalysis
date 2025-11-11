@@ -47,9 +47,19 @@ function compute_xy_center(ϕ,z_layer,tval)
         x = vcat(x, x[1])
         y = vcat(y, y[1])
     end
+    # check the orientation of coordinates 
     A = Ω(x, y)
     x_centroid = 1 / (6 * A) * sum((x[1:end-1] + x[2:end]) .* (x[1:end-1] .* y[2:end] - x[2:end] .* y[1:end-1]))
     y_centroid = 1 / (6 * A) * sum((y[1:end-1] + y[2:end]) .* (x[1:end-1] .* y[2:end] - x[2:end] .* y[1:end-1]))
+
+    if x_centroid < 0 && y_centroid < 0
+        x_rev = reverse(x)
+        y_rev = reverse(y)
+        A = Ω(x_rev, y_rev)
+        x_centroid = 1 / (6 * A) * sum((x_rev[1:end-1] + x_rev[2:end]) .* (x_rev[1:end-1] .* y_rev[2:end] - x_rev[2:end] .* y_rev[1:end-1]))
+        y_centroid = 1 / (6 * A) * sum((y_rev[1:end-1] + y_rev[2:end]) .* (x_rev[1:end-1] .* y_rev[2:end] - x_rev[2:end] .* y_rev[1:end-1]))
+    end
+    
     return (x_centroid, y_centroid)
 end
 

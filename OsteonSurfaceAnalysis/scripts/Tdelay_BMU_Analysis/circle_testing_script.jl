@@ -13,9 +13,10 @@ path_On = output_path_r2
 processes_output_path = output_path * "/circle_example.png"
 OsteonSurfaceAnalysis.generate_RG_img_from_data(path_HCa, path_On, processes_output_path)
 
-paths = [processes_output_path, processes_output_path]
+path = [processes_output_path]
+paths = repeat(path,20)
 downsample = 1
-Δz = 50.0;
+Δz = 10.0;
 Δθ = pi/6;
 ΔT = 0.2;
 

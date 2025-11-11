@@ -144,51 +144,58 @@ function curvature_at_contour(K::AbstractArray{T,3},
 end
 
 
+
 H,W,D = size(ϕ[:,:,:,1])
 x = collect(1.0:H)
 y = collect(1.0:W)
 z = collect(1.0:D)
 z_layer = 3
 
+K4 = OsteonSurfaceAnalysis.compute_curvature_4th(ϕ[:,:,:,ti],dx,dy,dz)
 f1 = Figure(size=(800,800))
-a1 = Axis3(f1[1, 1], title = "Computed curvature from ϕ")
+a1 = GLMakie.Axis3(f1[1, 1], title = "Computed curvature from ϕ")
+X = [xi for xi in x, yi in y, zi in z]
+Y = [yi for xi in x, yi in y, zi in z]
+Z = [zi for xi in x, yi in y, zi in z]
+
+
+
+f2 = Figure(size=(800,800))
+a1 = GLMakie.Axis(f2[1, 1], title = "Computed radius from ϕ(x,t) = 0 and 1 / κ")
+centroid = OsteonSurfaceAnalysis.compute_xy_center(ϕ, 10, size(ϕ,4))
 dx = 0.379; dy = 0.379; dz = 0.4;
+ti = 2;
+K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,ti],dx,dy,dz)
+z_layer = 10
+X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, ti);
+R = sqrt.((X .- centroid[1]).^2 .+ (Y .- centroid[2]).^2)
+k2 = curvature_at_contour(K2,x,y,z,z_layer,X,Y)
+lines!(a1, 1 ./ k2, linewidth = 3, color = :blue)
+lines!(a1, R, linewidth = 3, color = :red)
+
+
+f1 = Figure(size=(800,800))
+a1 = Axis(f1[1, 1], title = "Computed curvature from ϕ")
+dx = 1; dy = 1; dz = 1;
+centroid = OsteonSurfaceAnalysis.compute_xy_center(ϕ, 10, size(ϕ,4))
 for ti in axes(ϕ,4)
-    K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,ti],dx,dy,dz)
-    K4 = OsteonSurfaceAnalysis.compute_curvature_4th(ϕ[:,:,:,ti],dx,dy,dz)
+    #K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,ti],dx,dy,dz)
+    #K4 = OsteonSurfaceAnalysis.compute_curvature_4th(ϕ[:,:,:,ti],dx,dy,dz)
     X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, ti);
-    k2 = curvature_at_contour(K2,x,y,z,z_layer,X,Y)
-    k4 = curvature_at_contour(K4,x,y,z,z_layer,X,Y)
-    println("Contour: ", ti)
-    println("average second order curvature on 0 contour: ", mean(k2))
-    println("average fourth order curvature on 0 contour: ", mean(k4))
-    println("average difference between approximations on 0 contour: ", mean(k4 .- k2))
-    lines!(a1, X.*dx, Y.*dy, linewidth=4,color=k4, colormap=:jet, colorrange = (-0.3, 0.3))
+    curvature = OsteonSurfaceAnalysis.Analysis.local_curvature(X,Y; k = 20)
+    R = sqrt.((X .- centroid[1]).^2 .+ (Y .- centroid[2]).^2)
+    #k2 = curvature_at_contour(K2,x,y,z,z_layer,X,Y)
+    #k4 = curvature_at_contour(K4,x,y,z,z_layer,X,Y)
+    lines!(a1, X.*dx, Y.*dy, linewidth=4,color=curvature, colormap=:jet, colorrange = (0.01, 0.1))
 end
-Colorbar(f1[1,2], colormap=:jet, colorrange = (-0.3, 0.3))
+Colorbar(f1[1,2], colormap=:jet, colorrange = (0.01, 0.1))
 
 f1 = Figure(size=(800,800))
 a1 = Axis3(f1[1, 1], title = "Computed curvature from ϕ")
 lines!(a1, X, Y, linewidth=4,color=k, colormap=:jet, colorrange = (minimum(k), maximum(k)))
 
 
-# Plotting Results
-GLMakie.activate!()
-set_theme!(theme_black(), fontsize = 24)
-
-
-H,W,D = size(ϕ[:,:,:,1])
-x = collect(1.0:H)
-y = collect(1.0:W)
-z = collect(1.0:D)
-f1 = Figure(size=(800,800))
-a1 = Axis3(f1[1, 1], title = "Computed curvature from ϕ")
-
-contour!(a1, 1 .. H, 1 .. W, 1 .. D, ϕ[:,:,2:3,3], levels = [0], colormap=:jet, colorrange=(-1,1))
-
-lines!(a1, X, Y, linewidth=4,color=k, colormap=:jet, colorrange = (minimum(k), maximum(k)))
-Colorbar(f1[1,2], colormap=:jet, colorrange=(minimum(k), maximum(k)))
-
-
-
+# approximating curvature new method
+X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, ti);
+curvature = OsteonSurfaceAnalysis.Analysis.local_curvature(X,Y; k = 20)
 
