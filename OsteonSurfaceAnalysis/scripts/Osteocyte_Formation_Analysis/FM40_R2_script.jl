@@ -47,20 +47,17 @@ function edt_S_py(mask::AbstractArray{Bool,3}; dx=0.379, dy=0.379, dz=0.4)
     return dout .- din
 end
 
-ϕ_func = (t,S_DTʰ,S_DTᶜ) -> (1-t) .* S_DTʰ - (t) .* S_DTᶜ
-
-function compute_ϕ_at_t_3D_py(outer, inner, tval::Float64)
+function compute_EDT_S_py(outer, inner)
     outer_dt_S = pyconvert(Array{Float32, 3},edt_S_py(PythonCall.PyArray(outer)))
     inner_dt_S = pyconvert(Array{Float32, 3},edt_S_py(PythonCall.PyArray(inner)))
-    return ϕ_func(tval, outer_dt_S, inner_dt_S)
+    return outer_dt_S, inner_dt_S
 end
 
-function compute_ϕ_stack_3D_py(outer, inner, tvals)
-    H, W, Z = size(outer)
-    ϕ = zeros(Float32, H, W, Z, length(tvals))
+ϕ_func = (t,S_DTʰ,S_DTᶜ) -> (1-t) .* S_DTʰ - (t) .* S_DTᶜ
 
-    outer_dt_S = pyconvert(Array{Float32, 3},edt_S_py(PythonCall.PyArray(outer)))
-    inner_dt_S = pyconvert(Array{Float32, 3},edt_S_py(PythonCall.PyArray(inner)))
+function compute_ϕ_stack_3D(outer_dt_S, inner_dt_S, tvals)
+    H, W, Z = size(outer_dt_S)
+    ϕ = zeros(Float32, H, W, Z, length(tvals))
 
     for (ti, t) in enumerate(tvals)
         ϕ[:,:,:,ti] .= ϕ_func(t, outer_dt_S, inner_dt_S)
@@ -68,14 +65,11 @@ function compute_ϕ_stack_3D_py(outer, inner, tvals)
     return ϕ
 end
 
-function estimate_Ocy_formation_time(outer, inner, Ocy_pos_voxel)
-    # function to find closest (x,y,z) coord in HC_DT_S gridspace to Ocy_pos
+function estimate_Ocy_formation_time(outer_dt_S, inner_dt_S, Ocy_pos_voxel)
     t_form = zeros(size(Ocy_pos_voxel))
-    CL_DT_S = pyconvert(Array{Float32, 3},edt_S_py(PythonCall.PyArray(outer)))
-    HC_DT_S = pyconvert(Array{Float32, 3},edt_S_py(PythonCall.PyArray(inner)))
     for ii in eachindex(t_form)
         x = Ocy_pos_voxel[ii][1]; y = Ocy_pos_voxel[ii][2]; z = Ocy_pos_voxel[ii][3];
-        t_form[ii] = CL_DT_S[x,y,z] / (CL_DT_S[x,y,z] + HC_DT_S[x,y,z])
+        t_form[ii] = outer_dt_S[x,y,z] / (outer_dt_S[x,y,z] + inner_dt_S[x,y,z])
     end
     return t_form
 end
@@ -108,10 +102,12 @@ function unwrap_top_level_set_contour(ϕ, t_index, dx, dy)
     return R, θ
 end
 
+
 a_outer, a_inner = build_outer_inner(paths)
+outer_dt_S, inner_dt_S = compute_EDT_S_py(a_outer, a_inner) # only compute this once to save time
 
 # estimating formation times
-t_form = estimate_Ocy_formation_time(a_outer,a_inner,Ocy_pos_voxel)
+t_form = estimate_Ocy_formation_time(outer_dt_S,inner_dt_S,Ocy_pos_voxel)
 
 # ordereing formation time 
 t_form_index = sortperm(t_form)
@@ -119,23 +115,55 @@ t_form_ordered = t_form[t_form_index]
 Ocy_pos_ordered = Ocy_pos[t_form_index]
 Ocy_pos_voxel_ordered = Ocy_pos_voxel[t_form_index]
 
-tvals = []
-Ocy_pos_in_domain = []
-Ocy_pos_voxel_in_domain = []
+tvals = t_form_ordered
 
-for (ti,t) in enumerate(t_form_ordered)
-    if 0.0 <= t <= 1.0
-        push!(tvals, t_form_ordered[ti])
-        push!(Ocy_pos_in_domain, Ocy_pos_ordered[ti])
-        push!(Ocy_pos_voxel_in_domain, Ocy_pos_voxel_ordered[ti])
+#ϕ = compute_ϕ_stack_3D(outer_dt_S, inner_dt_S, tvals) # for some reason code breaks here
+
+function compute_curvature_near_osteocyte(tvals,outer_dt_S,inner_dt_S,Ocy_pos_voxel_ordered,dx,dy)
+    mean_available_κ = []
+    κ_at_osteocyte = []
+
+    function nearest_index(X, Y, x, y)
+        @assert length(X) == length(Y) "X and Y must be the same length"
+        @assert !isempty(X) "X and Y cannot be empty"
+        # Compute squared distances (faster than using sqrt)
+        d2 = @. (X - x)^2 + (Y - y)^2
+        # Return index of the minimum distance
+        i = argmin(d2)
+        return i
     end
+
+    for (idx,t_formed) in enumerate(tvals)
+        # compute level set at that time
+        ϕ = ϕ_func(t_formed, outer_dt_S, inner_dt_S)
+        z_layer = Ocy_pos_voxel_ordered[idx][3]
+        osteocyte_x = Ocy_pos_voxel_ordered[idx][1].*dx
+        osteocyte_y = Ocy_pos_voxel_ordered[idx][2].*dy
+        # find zero level contour
+        X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, idx);
+        # choose k depending on at what scale youre measuring curvature
+        contour_curvature = OsteonSurfaceAnalysis.compute_2D_curvature(X.*dx,Y.*dy; k=20);
+        push!(mean_available_κ, mean(contour_curvature))
+        push!(κ_at_osteocyte, contour_curvature[nearest_index(X.*dx, Y.*dy, osteocyte_x, osteocyte_y)])
+        
+    end
+    return κ_at_osteocyte, mean_available_κ
 end
 
-#tvals = collect(0:ΔT:1.0)
-tvals = tvals[1:10:61]
-idx = 1:10:61
+κ_at_osteocyte, mean_available_κ = compute_curvature_near_osteocyte(tvals,outer_dt_S,inner_dt_S,Ocy_pos_voxel_ordered,dx,dy)
 
-ϕ = compute_ϕ_stack_3D_py(a_outer, a_inner, tvals) # for some reason code breaks here
+
+set_theme!(theme_black(), fontsize = 30)
+GLMakie.activate!()
+f1 = Figure(size=(1900,600))
+a1 = Axis(f1[1, 1], title = "κ vs t_form", xlabel="t_form", ylabel="κ")
+a2 = Axis(f1[1, 2], title = "...", xlabel="κ - mean_κ", ylabel="t_form", limits=(-0.1, 0.1, 0, 1))
+a3 = Axis(f1[1, 3], title = "mean_κ vs t_form", xlabel="t_form", ylabel="κ - mean_κ")
+scatter!(a1, tvals, κ_at_osteocyte, markersize=15, color=:red)
+scatter!(a2, κ_at_osteocyte .- mean_available_κ, tvals, markersize=15, color=:red)
+scatter!(a3, tvals, mean_available_κ, markersize=15, color=:red)
+
+
 
 GLMakie.activate!()
 f1 = Figure(size=(800,800))
@@ -143,156 +171,6 @@ a1 = Axis(f1[1, 1], title = "Unwrapped osteon lamella: top level", xlabel="θ [r
 for ii in axes(ϕ,4)
     R, θ = unwrap_top_level_set_contour(ϕ, ii, dx, dy)
     lines!(a1, θ[sortperm(θ)], R[sortperm(θ)], linewidth = 3)
-end
-
-#ϕ = ϕ_func(0, outer_dt_S, inner_dt_S)
-
-H,W,D = size(ϕ[:,:,:,1])
-x = (collect(1:H).-1).*dx
-y = (collect(1:W).-1).*dy
-f1 = Figure(size=(800,800))
-a1 = Axis3(f1[1, 1], title = "Computed curvature from ϕ at z = $(6*dz)")
-surface!(a1, x, y, K2[:,:,6], colormap=:jet)
-
-f1 = Figure(size=(800,800))
-a1 = Axis3(f1[1, 1], title = "Computed curvature from ϕ")
-for ii in axes(ϕ,4)
-    contour!(a1, 0 .. H*dx, 0 .. W*dy, 0 .. D*dz, ϕ[:,:,:,ii], levels = [0.0], isorange = 3, colormap=:jet, colorrange=(-0.1,0.1))
-end
-contour!(a1, 0 .. H*dx, 0 .. W*dy, 0 .. D*dz, ϕ[:,:,:,1], levels = [0.0], isorange = 3, colormap=:jet, colorrange=(-0.1,0.1))
-contour!(a1, 0 .. H*dx, 0 .. W*dy, 0 .. D*dz, ϕ[:,:,:,end], levels = [0.0], isorange = 3, colormap=:jet, colorrange=(-0.1,0.1))
-scatter!(a1, Ocy_pos, markersize=12, color=:green)
-
-"""
-    curvature_at_contour(K, x, y, zgrid, zsel, X, Y; onbounds = :throw)
-
-Return a vector `k` with curvature values sampled from the z-slice of `K`
-corresponding to `zsel`, bilinearly interpolated at coordinates `(X[i], Y[i])`.
-
-Arguments
-- K     :: AbstractArray{T,3}   — size (length(x), length(y), length(zgrid))
-- x,y   :: AbstractVector{<:Real}  — monotonically increasing grid axes
-- zgrid :: AbstractVector{<:Real}  — z axis (same length as size(K,3))
-- zsel  :: Integer or Real       — either a z **index** (1..end) or a z **coordinate**
-- X,Y   :: AbstractVector{<:Real} — contour coordinates (same length)
-
-Keyword
-- onbounds :: Symbol — what to do if (X,Y) is outside the [x,y] domain:
-    :throw (default), :clamp (use nearest valid cell and clamp), or :NaN.
-
-Notes
-- If `zsel` is a Real, the nearest z-layer in `zgrid` is used.
-- Uses bilinear interpolation on the chosen z-slice. If X/Y land exactly on
-  grid nodes, this reduces to exact node sampling.
-"""
-function curvature_at_contour(K::AbstractArray{T,3},
-                              x::AbstractVector{<:Real},
-                              y::AbstractVector{<:Real},
-                              zgrid::AbstractVector{<:Real},
-                              zsel,
-                              X::AbstractVector{<:Real},
-                              Y::AbstractVector{<:Real};
-                              onbounds::Symbol = :throw) where {T}
-
-    nx, ny, nz = size(K)
-    @assert nx == length(x) "size(K,1) must equal length(x)"
-    @assert ny == length(y) "size(K,2) must equal length(y)"
-    @assert nz == length(zgrid) "size(K,3) must equal length(zgrid)"
-    @assert length(X) == length(Y) "X and Y must have same length"
-    @assert issorted(x) && issorted(y) && issorted(zgrid) "x, y, zgrid must be sorted"
-
-    # Resolve z index
-    k = if zsel isa Integer
-        1 <= zsel <= nz || throw(BoundsError("z index $zsel not in 1:$nz"))
-        zsel
-    else
-        # nearest index to the given z coordinate
-        j = searchsortedfirst(zgrid, zsel)
-        j <= 1 ? 1 :
-        j > nz ? nz :
-        (abs(zgrid[j] - zsel) < abs(zgrid[j-1] - zsel) ? j : j-1)
-    end
-
-    Ks = @view K[:, :, k]  # 2D slice at the chosen z
-    res = Vector{T}(undef, length(X))
-
-    # Helper to locate the x/y cell index just to the "left/below" of value v
-    # returning an index in 1:(n-1), plus the local interpolation weight t ∈ [0,1]
-    local function cell_and_t(grid::AbstractVector{<:Real}, v::Real, onbounds::Symbol)
-        n = length(grid)
-        # Fast paths for bounds
-        if v <= grid[1]
-            if onbounds === :throw
-                throw(BoundsError("value $v < grid minimum $(grid[1])"))
-            elseif onbounds === :NaN
-                return (1, NaN)
-            else # :clamp
-                return (1, 0.0)
-            end
-        elseif v >= grid[n]
-            if onbounds === :throw
-                throw(BoundsError("value $v > grid maximum $(grid[n])"))
-            elseif onbounds === :NaN
-                return (n-1, NaN)
-            else # :clamp — clamp to last cell, t=1
-                return (n-1, 1.0)
-            end
-        end
-
-        i_hi = searchsortedfirst(grid, v)       # 2..n
-        i_lo = i_hi - 1                         # 1..n-1
-        g0, g1 = grid[i_lo], grid[i_hi]
-        t = (v - g0) / (g1 - g0)
-        return (i_lo, t)
-    end
-
-    @inbounds for i in eachindex(X)
-        xi, yi = X[i], Y[i]
-        ix, tx = cell_and_t(x, xi, onbounds)
-        iy, ty = cell_and_t(y, yi, onbounds)
-
-        if isnan(tx) || isnan(ty)
-            res[i] = T(NaN)
-            continue
-        end
-
-        # Corners: (ix,iy)=lower-left
-        v00 = Ks[ix,   iy  ]
-        v10 = Ks[ix+1, iy  ]
-        v01 = Ks[ix,   iy+1]
-        v11 = Ks[ix+1, iy+1]
-
-        # Bilinear interpolation
-        res[i] = (1 - tx)*(1 - ty)*v00 +
-                 tx       *(1 - ty)*v10 +
-                 (1 - tx)*ty       *v01 +
-                 tx       *ty       *v11
-    end
-
-    return res
-end
-
-function moving_average(x::AbstractVector, window::Int)
-    n = length(x)
-    if window < 1 || window > n
-        throw(ArgumentError("window must be between 1 and length(x)"))
-    end
-
-    # Handle both row and column vectors
-    is_row = size(x, 1) == 1
-    xvec = vec(x)  # work as column internally
-
-    half = div(window, 2)
-    smoothed = similar(xvec, Float64)
-
-    for i in 1:n
-        # Compute wrapped indices
-        idxs = mod1.(i-half : i+half, n)
-        smoothed[i] = mean(xvec[idxs])
-    end
-
-    # Preserve shape
-    return vec(is_row ? reshape(smoothed, 1, :) : reshape(smoothed, :, 1))
 end
 
 
@@ -305,18 +183,10 @@ f1 = Figure(size=(800,800))
 a1 = Axis3(f1[1, 1], title = "Computed curvature from ϕ")
 dx = 0.379; dy = 0.379; dz = 0.4;
 for ti in axes(ϕ,4)
-    #K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,ti],dx,dy,dz)
     z_layer = Ocy_pos_voxel_in_domain[idx[ti]][3]
-    #K4 = OsteonSurfaceAnalysis.compute_curvature_4th(ϕ[:,:,:,ti],dx,dy,dz)
     X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, ti);
     R = sqrt.(X.^2 + Y.^2)
-    #k2 = curvature_at_contour(K2,x,y,z,z_layer,X,Y)
-    #k4 = curvature_at_contour(K4,x,y,z,z_layer,X,Y)
-    curvature = OsteonSurfaceAnalysis.Analysis.local_curvature(X,Y; k = 50)
-    #k4 = curvature_at_contour(K4,x,y,z,z_layer,X,Y)
-
-    #println("average fourth order curvature on 0 contour: ", mean(k4))
-    #println("average difference between approximations on 0 contour: ", mean(k4 .- k2))
+    curvature = OsteonSurfaceAnalysis.Analysis.local_curvature(X,Y; k=50)
     lines!(a1, X*dx, Y*dy, ones(length(X)).*z_layer*dz,linewidth=4,color=curvature, colormap=:dense, colorrange = (-0.01, 0.01))
 end
 scatter!(a1, Ocy_pos_in_domain[1:10:61], markersize=15,color=:red)
@@ -326,13 +196,11 @@ Colorbar(f1[1,2], colormap=:dense, colorrange = (-0.01, 0.01))
 f1 = Figure(size=(800,800))
 a1 = GLMakie.Axis(f1[1, 1], title = "Computed curvature from ϕ")
 dx = 0.379; dy = 0.379; dz = 0.4;
-ti = 2;
-K2 = OsteonSurfaceAnalysis.compute_curvature(ϕ[:,:,:,ti],dx,dy,dz)
-z_layer = 70#Ocy_pos_voxel_in_domain[idx[ti]][3]
-#K4 = OsteonSurfaceAnalysis.compute_curvature_4th(ϕ[:,:,:,ti],dx,dy,dz)
-X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, ti);
+z_layer = 70
+ϕ = ϕ_func(0.2, outer_dt_S, inner_dt_S)
+X,Y = OsteonSurfaceAnalysis.compute_zero_contour_xy_coords(ϕ, z_layer, 1);
 R = sqrt.((X.*dx).^2 + (Y.*dy).^2)
-k2 = curvature_at_contour(K2,x,y,z,z_layer,X,Y)
+k2 = OsteonSurfaceAnalysis.compute_2D_curvature(X.*dx,Y.*dy; k=50);
 lines!(a1, 1 ./ k2, linewidth = 3, color = :blue)
 lines!(a1, R, linewidth = 3, color = :red)
 

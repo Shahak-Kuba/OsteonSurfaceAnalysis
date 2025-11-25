@@ -26,7 +26,7 @@ edt, edt_S, compute_ϕ_at_t, compute_ϕ_stack, compute_ϕ_at_t_3D_py, compute_ϕ
 # Geometry & intersections
 compute_zero_contour_xy_coords, Ω, compute_xy_center, compute_planes_and_intersections, proj_3D_onto_XZ,
 #Analysis
-analysis_Tdelay_pairs, compute_curvature, compute_curvature_4th, estimate_Ocy_formation_time, 
+analysis_Tdelay_pairs, compute_curvature, compute_curvature_4th, estimate_Ocy_formation_time, compute_2D_curvature,
 # Plotting entrypoints
 plot_3d_contours!, plot_3d_contours_w_intersections!, plot_example_slices!, plot_α_β!
 

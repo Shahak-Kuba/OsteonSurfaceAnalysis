@@ -3,7 +3,7 @@ module Analysis
 using LinearAlgebra
 using Statistics
 
-export analysis_Tdelay_pairs, compute_curvature, compute_curvature_4th
+export analysis_Tdelay_pairs, compute_curvature, compute_curvature_4th, compute_2D_curvature
 
 function generate_Tdelay_pairs(proj_points)
     Tdelay_proj_point_pairs = []
@@ -296,7 +296,7 @@ Notes
 - If you have very noisy data, consider increasing `k`.
 - For sharp corners, any quadratic will smear the peak; treat separately if needed.
 """
-function local_curvature(x::AbstractVector, y::AbstractVector;
+function compute_2D_curvature(x::AbstractVector, y::AbstractVector;
                          k::Int=5, method::Symbol=:constrained,
                          sigma=nothing, weights::Symbol=:none,
                          signed::Bool=true)
@@ -384,5 +384,82 @@ function local_curvature(x::AbstractVector, y::AbstractVector;
 
     return κ
 end
+
+function compute_2D_curvature(x,y; k=3, eps=1e-10)
+    @assert length(x) == length(y) "x and y must have same length"
+    N = length(x)-1
+    @assert N ≥ 5 "Need at least 5 points"
+    #println(x)
+    # ensuring that the orientation from Marching Squares is anti clockwise
+    X,Y = ensure_ccw(x, y)
+    pop!(x); pop!(y)
+
+    println(size(x))
+
+    wrap(i) = mod1(i, N)
+
+    function tangent(x,y,i)
+        ip = wrap(i+1); im = wrap(i-1)
+        tx = x[ip] - x[im]
+        ty = y[ip] - y[im]
+        n = hypot(tx, ty)
+        return n == 0 ? (1.0, 0.0) : (tx/n, ty/n)
+    end
+
+    function rotate(p::Tuple{<:Real,<:Real}, θ::Real; about=(0.0, 0.0))
+        x, y   = p
+        cx, cy = about
+        c = cos(θ); s = sin(θ)
+        dx, dy = x - cx, y - cy
+        return (cx + c*dx - s*dy,  cy + s*dx + c*dy)
+    end
+
+    curvature = zeros(length(x),1)
+    for ii in eachindex(x)
+        # getting the indicies of the considered nodes on either side of the ii point
+        left  = [wrap(ii - s) for s in k:-1:1]
+        right = [wrap(ii + s) for s in 1:k]
+        ii_considered = vcat(left, ii, right)
+        x_central = X[ii]
+        y_central = Y[ii]
+        x_considered = X[ii_considered]
+        y_considered = Y[ii_considered]
+
+        # calculating tangent at ii
+        tx, ty = tangent(X,Y,ii)
+
+        rotation_θ = atan(ty,tx)
+        # move the points so that the ii point is at the origin
+        x_considered_center = x_considered .- x_central
+        y_considered_center = y_considered .- y_central
+        points = [(X,Y) for (X,Y) in zip(x_considered_center,y_considered_center)]
+
+        # rotate the points
+        rotated_points = []
+        for point in points
+            push!(rotated_points,rotate(point, -rotation_θ))
+        end
+
+        # calculating LS fit parabola: x = (A'A)¹A'b
+        A = zeros(length(points), 3)
+        for jj in eachindex(rotated_points)
+            A[jj, :] .= [rotated_points[jj][1]^2, rotated_points[jj][1], 1]
+        end
+
+        y_array = [y for (x,y) in rotated_points]
+
+        a,b,c = (A'*A)\(A'*y_array)
+
+        num = abs(2*a)
+        # since I center the points about a central point (0,0) then 2ax = 0 
+        # + eps is to avoid division by 0
+        denom = ( 1 + b^2 )^(3/2) + eps 
+
+        # estimating curvature from parabola
+        curvature[ii] = num / denom
+    end
+    return curvature
+end
+
 
 end # end of module
